@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LiveNote Chat</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell center-shell">
+      <section class="card hero-card hero-card-compact">
+        <p class="eyebrow">Temporary shared chat rooms</p>
+        <h1>Start a room in one click</h1>
+        <p class="subtext">
+          Pick a room type and jump straight in. Share the room link from inside the room.
+          Rooms use meaningful URLs like <strong>/green-apple-a3f2</strong> and disappear when the room ends.
+        </p>
+
+        <div class="quick-create-grid">
+          <button id="createPrivateRoomBtn" class="quick-create-btn quick-create-private">
+            <span class="quick-create-title">Create Private Room</span>
+            <span class="quick-create-desc">Anyone who joins with the link can kill the room for everyone.</span>
+          </button>
+
+          <button id="createAdminRoomBtn" class="quick-create-btn quick-create-admin">
+            <span class="quick-create-title">Create Admin Room</span>
+            <span class="quick-create-desc">Only the admin can kill the room. Users can delete only their own messages.</span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <script src="/index.js"></script>
+  </body>
+</html>

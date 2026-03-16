@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>LiveNote Room</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="room-page">
+    <main class="room-app">
+      <header class="room-header">
+        <div class="room-header-main">
+          <div class="room-title-block">
+            <p class="eyebrow">Live room</p>
+            <h1 id="roomTitle">Connecting...</h1>
+            <div class="room-meta-inline">
+              <span id="roomTypeBadge" class="badge">Private room</span>
+              <span id="presenceBadge" class="badge">0 people</span>
+              <span id="expiryBadge" class="badge">Expires in 2h 0m</span>
+            </div>
+          </div>
+
+          <div class="room-actions-desktop">
+            <button id="copyRoomBtn" class="secondary-btn">Copy Link</button>
+            <button id="leaveRoomBtn" class="secondary-btn">Leave Room</button>
+            <button id="killRoomBtn" class="danger-btn">Kill Room</button>
+          </div>
+        </div>
+
+        <div class="room-actions-mobile">
+          <button id="openPeopleBtn" class="secondary-btn mobile-half-btn" type="button">People</button>
+          <button id="copyRoomBtnMobile" class="secondary-btn mobile-half-btn" type="button">Copy Link</button>
+        </div>
+      </header>
+
+      <section class="room-body">
+        <aside class="people-panel desktop-people-panel">
+          <div class="people-header">People here</div>
+          <div id="peopleList" class="people-list"></div>
+
+          <div class="image-rules">
+            <div class="muted small-text">Image rules</div>
+            <ul>
+              <li>Compressed to WebP</li>
+              <li>4 MB max upload before compression</li>
+              <li>12 MB total image memory per room</li>
+            </ul>
+          </div>
+        </aside>
+
+        <section class="chat-panel">
+          <div id="messages" class="messages"></div>
+          <div id="typingBar" class="typing-bar hidden"></div>
+          <div id="uploadStatus" class="upload-status hidden"></div>
+
+          <form id="messageForm" class="composer" enctype="multipart/form-data">
+            <div class="composer-main">
+              <input
+                id="messageInput"
+                type="text"
+                maxlength="1500"
+                placeholder="Type a message..."
+                autocomplete="off"
+              />
+
+              <div id="selectedImageWrap" class="selected-image hidden">
+                <span id="selectedImageName">No image selected</span>
+                <button id="clearImageBtn" type="button" class="secondary-btn compact-btn">Remove</button>
+              </div>
+            </div>
+
+            <div class="composer-actions">
+              <label class="secondary-btn file-btn" for="imageInput">Add Image</label>
+              <input id="imageInput" type="file" accept="image/*" hidden />
+              <button type="submit" class="primary-btn">Send</button>
+            </div>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <div id="peopleDrawer" class="drawer hidden" aria-hidden="true">
+      <div id="drawerBackdrop" class="drawer-backdrop"></div>
+
+      <aside class="drawer-panel" role="dialog" aria-modal="true" aria-label="People in room">
+        <div class="drawer-handle"></div>
+
+        <div class="drawer-header">
+          <div>
+            <div class="people-header">People here</div>
+            <div class="muted small-text">Room details and controls</div>
+          </div>
+          <button id="closePeopleBtn" class="secondary-btn compact-btn" type="button">Close</button>
+        </div>
+
+        <div id="peopleListMobile" class="people-list"></div>
+
+        <div class="image-rules drawer-rules">
+          <div class="muted small-text">Image rules</div>
+          <ul>
+            <li>Compressed to WebP</li>
+            <li>4 MB max upload before compression</li>
+            <li>12 MB total image memory per room</li>
+          </ul>
+        </div>
+
+        <div class="drawer-actions">
+          <button id="leaveRoomBtnMobile" class="secondary-btn">Leave Room</button>
+          <button id="killRoomBtnMobile" class="danger-btn">Kill Room</button>
+        </div>
+
+        <a class="text-link drawer-link" href="/">Create another room</a>
+      </aside>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/room.js"></script>
+  </body>
+</html>

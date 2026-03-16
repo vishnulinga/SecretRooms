@@ -1,0 +1,755 @@
+const path = require('path');
+const express = require('express');
+const http = require('http');
+const crypto = require('crypto');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const multer = require('multer');
+const sharp = require('sharp');
+const { Server } = require('socket.io');
+
+const app = express();
+app.set('trust proxy', 1);
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: false },
+  transports: ['websocket', 'polling'],
+  maxHttpBufferSize: 1e6,
+});
+
+const PORT = Number(process.env.PORT || 3000);
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PROD = NODE_ENV === 'production';
+
+const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+const UNUSED_ROOM_TTL_MS = 60 * 1000;
+const MAX_ROOMS = 5000;
+const MAX_MESSAGES = 250;
+const MAX_MESSAGE_LENGTH = 1500;
+const MAX_SOCKETS_PER_IP = 12;
+const MAX_JOINED_ROOMS_PER_IP = 20;
+const MAX_UPLOAD_SIZE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_BYTES_PER_ROOM = 12 * 1024 * 1024;
+const MAX_IMAGES_PER_ROOM = 40;
+const MAX_IMAGE_WIDTH = 1280;
+const MAX_IMAGE_HEIGHT = 1280;
+const IMAGE_QUALITY = 72;
+
+const USER_COLORS = [
+  '#7c9cff', '#59d9b7', '#ff9f6e', '#f779c1', '#ffd166',
+  '#c792ea', '#6ee7ff', '#a3e635', '#fb7185', '#22d3ee'
+];
+
+const ROOM_ADJECTIVES = [
+  'green','silver','tiny','happy','wild','brave','lucky','sunny','fuzzy','swift','magic','neon',
+  'cosmic','quiet','electric','crisp','golden','sleepy','spicy','velvet','rapid','clever','minty','bright'
+];
+const ROOM_NOUNS = [
+  'apple','tiger','rocket','panda','pizza','river','planet','cookie','dragon','banana','forest','otter',
+  'thunder','cactus','falcon','breeze','pearl','comet','dolphin','meadow','phoenix','cloud','galaxy','mango'
+];
+
+const NAME_ADJECTIVES = [
+  'Funky','Turbo','Sleepy','Cosmic','Wobbly','Angry','Neon','Lucky','Cheeky','Jolly','Sneaky','Nifty',
+  'Dizzy','Bouncy','Sassy','Zippy','Goofy','Sparkly','Mighty','Chunky','Noisy','Silly','Spicy','Giggly'
+];
+const NAME_NOUNS = [
+  'Penguin','Potato','Panda','Banana','Tiger','Burrito','Otter','Noodle','Fox','Goblin','Muffin','Pickle',
+  'Unicorn','Taco','Koala','Llama','Dragon','Waffle','Hamster','Raccoon','Cupcake','Cactus','Mango','Walrus'
+];
+
+const rooms = new Map();
+const ipConnectionCounts = new Map();
+const ipActiveRooms = new Map();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_SIZE_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image uploads are allowed.'));
+    }
+    cb(null, true);
+  },
+});
+
+function getClientIp(reqOrSocket) {
+  const raw =
+    reqOrSocket?.headers?.['x-forwarded-for'] ||
+    reqOrSocket?.handshake?.headers?.['x-forwarded-for'] ||
+    reqOrSocket?.socket?.remoteAddress ||
+    reqOrSocket?.conn?.remoteAddress ||
+    reqOrSocket?.request?.socket?.remoteAddress ||
+    reqOrSocket?.handshake?.address ||
+    'unknown';
+
+  return String(raw).split(',')[0].trim();
+}
+
+function randomFrom(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function createRoomId() {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const id = `${randomFrom(ROOM_ADJECTIVES)}-${randomFrom(ROOM_NOUNS)}-${crypto.randomBytes(2).toString('hex')}`;
+    if (!rooms.has(id)) return id;
+  }
+  return crypto.randomUUID();
+}
+
+function createFunnyName(existingNames = new Set()) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const name = `${randomFrom(NAME_ADJECTIVES)}${randomFrom(NAME_NOUNS)}`;
+    if (!existingNames.has(name)) return name;
+  }
+  return `Mystery${crypto.randomBytes(2).toString('hex')}`;
+}
+
+function getRoomImageUsageBytes(room) {
+  let total = 0;
+  for (const asset of room.assets.values()) total += asset.buffer.length;
+  return total;
+}
+
+function createRoom(roomId, roomType = 'private') {
+  if (rooms.size >= MAX_ROOMS) {
+    throw new Error('Server is at room capacity. Please try again later.');
+  }
+
+  const now = Date.now();
+  const room = {
+    id: roomId,
+    type: roomType === 'admin' ? 'admin' : 'private',
+    adminSocketId: null,
+    messages: [],
+    users: new Map(),
+    typing: new Map(),
+    assets: new Map(),
+    createdAt: now,
+    expiresAt: now + ROOM_TTL_MS,
+    expiryTimer: null,
+    unusedTimer: null,
+  };
+
+  rooms.set(roomId, room);
+  scheduleRoomExpiry(roomId);
+  scheduleUnusedRoomExpiry(roomId);
+  return room;
+}
+
+function extendRoomExpiry(room) {
+  room.expiresAt = Date.now() + ROOM_TTL_MS;
+  scheduleRoomExpiry(room.id);
+}
+
+function scheduleRoomExpiry(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  if (room.expiryTimer) clearTimeout(room.expiryTimer);
+
+  const delay = Math.max(1000, room.expiresAt - Date.now());
+  room.expiryTimer = setTimeout(() => destroyRoom(roomId, 'expired'), delay);
+}
+
+function scheduleUnusedRoomExpiry(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  if (room.unusedTimer) clearTimeout(room.unusedTimer);
+
+  room.unusedTimer = setTimeout(() => {
+    const active = rooms.get(roomId);
+    if (active && active.users.size === 0) destroyRoom(roomId, 'unused');
+  }, UNUSED_ROOM_TTL_MS);
+}
+
+function clearUnusedRoomExpiry(room) {
+  if (room.unusedTimer) {
+    clearTimeout(room.unusedTimer);
+    room.unusedTimer = null;
+  }
+}
+
+function updateIpRoomCount(ip, delta) {
+  const current = ipActiveRooms.get(ip) || 0;
+  const next = current + delta;
+  if (next <= 0) ipActiveRooms.delete(ip);
+  else ipActiveRooms.set(ip, next);
+}
+
+function destroyRoom(roomId, reason = 'deleted') {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  if (room.expiryTimer) clearTimeout(room.expiryTimer);
+  if (room.unusedTimer) clearTimeout(room.unusedTimer);
+
+  io.to(roomId).emit('room:killed', { reason });
+
+  for (const [socketId, user] of room.users.entries()) {
+    updateIpRoomCount(user.ip, -1);
+    const clientSocket = io.sockets.sockets.get(socketId);
+    if (clientSocket) {
+      clientSocket.leave(roomId);
+      clientSocket.data.roomId = null;
+      clientSocket.data.userId = null;
+    }
+  }
+
+  room.assets.clear();
+  rooms.delete(roomId);
+}
+
+function sanitizeMessage(value) {
+  return String(value || '').trim().slice(0, MAX_MESSAGE_LENGTH);
+}
+
+function buildAssetUrl(roomId, assetId) {
+  return `/room-assets/${roomId}/${assetId}`;
+}
+
+function serializeMessage(roomId, message) {
+  return {
+    id: message.id,
+    senderId: message.senderId,
+    senderName: message.senderName,
+    senderColor: message.senderColor,
+    text: message.text,
+    createdAt: message.createdAt,
+    kind: message.kind || 'text',
+    image: message.imageAssetId
+      ? {
+          assetId: message.imageAssetId,
+          url: buildAssetUrl(roomId, message.imageAssetId),
+          width: message.imageWidth,
+          height: message.imageHeight,
+          sizeBytes: message.imageBytes,
+        }
+      : null,
+  };
+}
+
+function roomPayload(room) {
+  return {
+    roomId: room.id,
+    roomType: room.type,
+    participants: room.users.size,
+    messages: room.messages.map((message) => serializeMessage(room.id, message)),
+    users: Array.from(room.users.values()).map((user) => ({
+      id: user.id,
+      name: user.name,
+      color: user.color,
+      isAdmin: user.id === room.adminSocketId,
+    })),
+    typing: Array.from(room.typing.values()),
+    expiresAt: room.expiresAt,
+  };
+}
+
+function broadcastRoomState(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  io.to(roomId).emit('room:state', roomPayload(room));
+}
+
+function removeTyping(room, socketId) {
+  room.typing.delete(socketId);
+}
+
+function trimMessages(room) {
+  if (room.messages.length <= MAX_MESSAGES) return;
+  const removed = room.messages.splice(0, room.messages.length - MAX_MESSAGES);
+  const removedAssetIds = new Set(removed.map((m) => m.imageAssetId).filter(Boolean));
+
+  for (const assetId of removedAssetIds) {
+    const stillReferenced = room.messages.some((m) => m.imageAssetId === assetId);
+    if (!stillReferenced) room.assets.delete(assetId);
+  }
+}
+
+function deleteMessageById(room, messageId, requesterId) {
+  const index = room.messages.findIndex(
+    (message) => message.id === messageId && message.senderId === requesterId
+  );
+  if (index === -1) return false;
+
+  const [removed] = room.messages.splice(index, 1);
+  if (removed?.imageAssetId) {
+    const stillReferenced = room.messages.some((m) => m.imageAssetId === removed.imageAssetId);
+    if (!stillReferenced) room.assets.delete(removed.imageAssetId);
+  }
+
+  return true;
+}
+
+function logSecurity(event, meta = {}) {
+  console.warn(`[security] ${event}`, meta);
+}
+
+function createSocketLimiter({ limit, windowMs, keyFn }) {
+  const buckets = new Map();
+
+  return function check(socket) {
+    const now = Date.now();
+    const key = `${keyFn(socket)}:${windowMs}:${limit}`;
+    const bucket = buckets.get(key) || { count: 0, resetAt: now + windowMs };
+
+    if (now > bucket.resetAt) {
+      bucket.count = 0;
+      bucket.resetAt = now + windowMs;
+    }
+
+    bucket.count += 1;
+    buckets.set(key, bucket);
+    return bucket.count <= limit;
+  };
+}
+
+const socketLimitByIp = (limit, windowMs) =>
+  createSocketLimiter({
+    limit,
+    windowMs,
+    keyFn: (socket) => getClientIp(socket),
+  });
+
+const joinLimiter = socketLimitByIp(20, 60_000);
+const messageLimiter = socketLimitByIp(20, 10_000);
+const typingLimiter = socketLimitByIp(16, 5_000);
+const killLimiter = socketLimitByIp(5, 60_000);
+
+const createLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many room creations from this IP. Please wait a bit.' },
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many image uploads from this IP. Please wait a bit.' },
+});
+
+if (IS_PROD) {
+  app.use((req, res, next) => {
+    const proto = req.headers['x-forwarded-proto'];
+    if (proto && proto !== 'https') {
+      return res.redirect(`https://${req.headers.host}${req.originalUrl}`);
+    }
+    next();
+  });
+}
+
+app.use(
+  helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'", 'ws:', 'wss:'],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    referrerPolicy: { policy: 'no-referrer' },
+  })
+);
+
+app.disable('x-powered-by');
+app.use(express.json({ limit: '50kb' }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  maxAge: 0,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store');
+  },
+}));
+
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.post('/api/rooms', createLimiter, (req, res) => {
+  try {
+    const roomType = req.body?.roomType === 'admin' ? 'admin' : 'private';
+    const roomId = createRoomId();
+    createRoom(roomId, roomType);
+
+    res.json({ roomId, roomType, url: `/${roomId}` });
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'Could not create room.' });
+  }
+});
+
+app.post('/api/rooms/:roomId/upload-image', uploadLimiter, upload.single('image'), async (req, res) => {
+  const roomId = req.params.roomId;
+  const room = rooms.get(roomId);
+
+  if (!room) return res.status(404).json({ error: 'Room not found.' });
+  if (!req.file) return res.status(400).json({ error: 'No image received.' });
+  if (room.assets.size >= MAX_IMAGES_PER_ROOM) {
+    return res.status(400).json({ error: 'This room reached the image limit.' });
+  }
+
+  try {
+    const transformed = sharp(req.file.buffer)
+      .rotate()
+      .resize({
+        width: MAX_IMAGE_WIDTH,
+        height: MAX_IMAGE_HEIGHT,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: IMAGE_QUALITY });
+
+    const metadata = await transformed.metadata();
+    const compressed = await transformed.toBuffer();
+
+    if (getRoomImageUsageBytes(room) + compressed.length > MAX_IMAGE_BYTES_PER_ROOM) {
+      return res.status(400).json({ error: 'This room is out of temporary image space.' });
+    }
+
+    const assetId = crypto.randomUUID();
+    room.assets.set(assetId, {
+      id: assetId,
+      buffer: compressed,
+      mimeType: 'image/webp',
+      createdAt: Date.now(),
+      width: metadata.width || null,
+      height: metadata.height || null,
+    });
+
+    extendRoomExpiry(room);
+
+    return res.json({
+      assetId,
+      url: buildAssetUrl(roomId, assetId),
+      mimeType: 'image/webp',
+      width: metadata.width || null,
+      height: metadata.height || null,
+      sizeBytes: compressed.length,
+    });
+  } catch (error) {
+    logSecurity('image_processing_failed', { roomId, error: String(error) });
+    return res.status(400).json({ error: 'Could not process that image.' });
+  }
+});
+
+app.get('/room-assets/:roomId/:assetId', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) return res.status(404).send('Not found');
+
+  const asset = room.assets.get(req.params.assetId);
+  if (!asset) return res.status(404).send('Not found');
+
+  extendRoomExpiry(room);
+  res.setHeader('Content-Type', asset.mimeType);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(asset.buffer);
+});
+
+app.get('/:roomId([a-z0-9-]+)', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'room.html'));
+});
+
+io.use((socket, next) => {
+  const ip = getClientIp(socket);
+  const current = ipConnectionCounts.get(ip) || 0;
+  if (current >= MAX_SOCKETS_PER_IP) {
+    return next(new Error('Too many active connections from this IP.'));
+  }
+  socket.data.clientIp = ip;
+  ipConnectionCounts.set(ip, current + 1);
+  next();
+});
+
+io.on('connection', (socket) => {
+  socket.data.roomId = null;
+  socket.data.userId = null;
+  socket.data.typingTimeout = null;
+
+  socket.on('room:join', ({ roomId }) => {
+    if (!joinLimiter(socket)) {
+      socket.emit('room:error', { message: 'Too many join attempts. Please slow down.' });
+      return;
+    }
+
+    if (!roomId || !/^[a-z0-9-]+$/.test(roomId)) {
+      socket.emit('room:error', { message: 'Invalid room ID.' });
+      return;
+    }
+
+    const room = rooms.get(roomId);
+    if (!room) {
+      socket.emit('room:not-found');
+      return;
+    }
+
+    const ip = socket.data.clientIp;
+    if ((ipActiveRooms.get(ip) || 0) >= MAX_JOINED_ROOMS_PER_IP) {
+      socket.emit('room:error', { message: 'Too many joined rooms from this IP.' });
+      return;
+    }
+
+    extendRoomExpiry(room);
+    clearUnusedRoomExpiry(room);
+
+    const existingNames = new Set(Array.from(room.users.values()).map((user) => user.name));
+    const profile = {
+      id: socket.id,
+      name: createFunnyName(existingNames),
+      color: USER_COLORS[room.users.size % USER_COLORS.length],
+      ip,
+    };
+
+    if (room.type === 'admin' && !room.adminSocketId) room.adminSocketId = socket.id;
+
+    socket.join(roomId);
+    socket.data.roomId = roomId;
+    socket.data.userId = socket.id;
+    room.users.set(socket.id, profile);
+    updateIpRoomCount(ip, 1);
+
+    socket.emit('room:joined', {
+      self: {
+        id: profile.id,
+        name: profile.name,
+        color: profile.color,
+        isAdmin: socket.id === room.adminSocketId,
+      },
+      roomType: room.type,
+      expiresAt: room.expiresAt,
+    });
+
+    broadcastRoomState(roomId);
+  });
+
+  socket.on('room:send-message', ({ roomId, text }) => {
+    if (!messageLimiter(socket)) return;
+    const room = rooms.get(roomId);
+
+    if (!room || socket.data.roomId !== roomId) {
+      socket.emit('room:error', { message: 'Room no longer exists.' });
+      return;
+    }
+
+    const user = room.users.get(socket.id);
+    const cleanText = sanitizeMessage(text);
+    if (!user || !cleanText) return;
+
+    extendRoomExpiry(room);
+    removeTyping(room, socket.id);
+
+    if (socket.data.typingTimeout) {
+      clearTimeout(socket.data.typingTimeout);
+      socket.data.typingTimeout = null;
+    }
+
+    room.messages.push({
+      id: crypto.randomUUID(),
+      senderId: user.id,
+      senderName: user.name,
+      senderColor: user.color,
+      text: cleanText,
+      createdAt: Date.now(),
+      kind: 'text',
+    });
+
+    trimMessages(room);
+    broadcastRoomState(roomId);
+  });
+
+  socket.on('room:send-image', ({ roomId, assetId, text = '' }) => {
+    if (!messageLimiter(socket)) return;
+    const room = rooms.get(roomId);
+
+    if (!room || socket.data.roomId !== roomId) {
+      socket.emit('room:error', { message: 'Room no longer exists.' });
+      return;
+    }
+
+    const user = room.users.get(socket.id);
+    const asset = room.assets.get(assetId);
+    const cleanText = sanitizeMessage(text);
+    if (!user || !asset) return;
+
+    extendRoomExpiry(room);
+    removeTyping(room, socket.id);
+
+    if (socket.data.typingTimeout) {
+      clearTimeout(socket.data.typingTimeout);
+      socket.data.typingTimeout = null;
+    }
+
+    room.messages.push({
+      id: crypto.randomUUID(),
+      senderId: user.id,
+      senderName: user.name,
+      senderColor: user.color,
+      text: cleanText,
+      createdAt: Date.now(),
+      kind: 'image',
+      imageAssetId: assetId,
+      imageWidth: asset.width,
+      imageHeight: asset.height,
+      imageBytes: asset.buffer.length,
+    });
+
+    trimMessages(room);
+    broadcastRoomState(roomId);
+  });
+
+  socket.on('room:typing', ({ roomId, isTyping }) => {
+    if (!typingLimiter(socket)) return;
+    const room = rooms.get(roomId);
+    if (!room || socket.data.roomId !== roomId) return;
+
+    const user = room.users.get(socket.id);
+    if (!user) return;
+
+    if (isTyping) {
+      room.typing.set(socket.id, { id: user.id, name: user.name, color: user.color });
+      if (socket.data.typingTimeout) clearTimeout(socket.data.typingTimeout);
+
+      socket.data.typingTimeout = setTimeout(() => {
+        const activeRoom = rooms.get(roomId);
+        if (!activeRoom) return;
+        removeTyping(activeRoom, socket.id);
+        broadcastRoomState(roomId);
+      }, 1400);
+    } else {
+      removeTyping(room, socket.id);
+      if (socket.data.typingTimeout) {
+        clearTimeout(socket.data.typingTimeout);
+        socket.data.typingTimeout = null;
+      }
+    }
+
+    broadcastRoomState(roomId);
+  });
+
+  socket.on('message:delete', ({ roomId, messageId }) => {
+    const room = rooms.get(roomId);
+    if (!room || socket.data.roomId !== roomId) return;
+
+    const removed = deleteMessageById(room, messageId, socket.id);
+    if (!removed) return;
+
+    extendRoomExpiry(room);
+    broadcastRoomState(roomId);
+  });
+
+  socket.on('room:leave', ({ roomId }) => {
+    const room = rooms.get(roomId);
+    if (!room || socket.data.roomId !== roomId) {
+      socket.emit('room:left');
+      return;
+    }
+
+    const profile = room.users.get(socket.id);
+    removeTyping(room, socket.id);
+    room.users.delete(socket.id);
+    socket.leave(roomId);
+    socket.data.roomId = null;
+    socket.data.userId = null;
+
+    if (profile?.ip) updateIpRoomCount(profile.ip, -1);
+
+    if (socket.data.typingTimeout) {
+      clearTimeout(socket.data.typingTimeout);
+      socket.data.typingTimeout = null;
+    }
+
+    if (room.type === 'admin' && room.adminSocketId === socket.id) {
+      const nextAdmin = room.users.keys().next();
+      room.adminSocketId = nextAdmin.done ? null : nextAdmin.value;
+    }
+
+    socket.emit('room:left');
+
+    if (room.users.size === 0) {
+      destroyRoom(roomId, 'empty');
+      return;
+    }
+
+    broadcastRoomState(roomId);
+  });
+
+  socket.on('room:kill', ({ roomId }) => {
+    if (!killLimiter(socket)) return;
+    const room = rooms.get(roomId);
+    if (!room || socket.data.roomId !== roomId) return;
+
+    const isAllowed = room.type === 'private' || room.adminSocketId === socket.id;
+    if (!isAllowed) {
+      socket.emit('room:error', { message: 'Only the admin can kill this room.' });
+      return;
+    }
+
+    destroyRoom(roomId, 'deleted');
+  });
+
+  socket.on('disconnect', () => {
+    const ip = socket.data.clientIp;
+    const current = ipConnectionCounts.get(ip) || 0;
+    if (current <= 1) ipConnectionCounts.delete(ip);
+    else ipConnectionCounts.set(ip, current - 1);
+
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    const profile = room.users.get(socket.id);
+    removeTyping(room, socket.id);
+    room.users.delete(socket.id);
+
+    if (profile?.ip) updateIpRoomCount(profile.ip, -1);
+
+    if (socket.data.typingTimeout) {
+      clearTimeout(socket.data.typingTimeout);
+      socket.data.typingTimeout = null;
+    }
+
+    if (room.type === 'admin' && room.adminSocketId === socket.id) {
+      const nextAdmin = room.users.keys().next();
+      room.adminSocketId = nextAdmin.done ? null : nextAdmin.value;
+    }
+
+    if (room.users.size === 0) {
+      destroyRoom(roomId, 'empty');
+      return;
+    }
+
+    broadcastRoomState(roomId);
+  });
+});
+
+app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      error: 'Image is too large. Keep it under 4 MB before compression.',
+    });
+  }
+
+  if (error) {
+    logSecurity('server_error', { error: String(error) });
+    return res.status(500).json({ error: 'Unexpected server error.' });
+  }
+
+  return res.status(500).json({ error: 'Unexpected server error.' });
+});
+
+server.listen(PORT, () => {
+  console.log(`LiveNote Secure Beta running on http://localhost:${PORT}`);
+});

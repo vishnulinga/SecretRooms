@@ -1,0 +1,19 @@
+{
+  "name": "livenote-secure-beta",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ephemeral realtime chat with mobile-first UI and basic abuse protection",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.1.0",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.5",
+    "socket.io": "^4.8.1"
+  }
+}
