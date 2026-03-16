@@ -157,7 +157,10 @@ function renderMessageBody(message) {
     ? `<div class="message-text ${message.kind === 'image' ? 'message-text-with-image' : ''}">${escapeHtml(message.text)}</div>`
     : '';
 
-  const imageBlock = message.image
+  const widthAttr = message.image?.width ? `width="${Number(message.image.width)}"` : '';
+const heightAttr = message.image?.height ? `height="${Number(message.image.height)}"` : '';
+
+const imageBlock = message.image
   ? `
     <div class="message-image-wrap">
       <div class="message-image-frame">
@@ -167,6 +170,8 @@ function renderMessageBody(message) {
             src="${escapeHtml(message.image.url)}"
             alt="Shared image by ${escapeHtml(message.senderName)}"
             loading="lazy"
+            ${widthAttr}
+            ${heightAttr}
           />
         </a>
 
@@ -209,6 +214,42 @@ function scrollToBottom(force = false) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
     hideJumpButton();
   }
+}
+
+function stabilizeScrollAfterMedia() {
+  if (!(shouldStickToBottom || isNearBottom())) return;
+
+  requestAnimationFrame(() => {
+    scrollToBottom(true);
+
+    requestAnimationFrame(() => {
+      scrollToBottom(true);
+
+      setTimeout(() => {
+        scrollToBottom(true);
+      }, 60);
+    });
+  });
+}
+
+function attachImageLoadHandlers() {
+  const images = messagesEl.querySelectorAll('.message-image');
+
+  images.forEach((img) => {
+    if (img.dataset.scrollBound === '1') return;
+    img.dataset.scrollBound = '1';
+
+    const onReady = () => {
+      stabilizeScrollAfterMedia();
+    };
+
+    if (img.complete) {
+      onReady();
+    } else {
+      img.addEventListener('load', onReady, { once: true });
+      img.addEventListener('error', onReady, { once: true });
+    }
+  });
 }
 
 function showJumpButton() {
@@ -254,8 +295,12 @@ function renderMessages(messages) {
     })
     .join('');
 
+  attachImageLoadHandlers();
+
   if (wasNearBottom || shouldStickToBottom) {
-    scrollToBottom(true);
+    requestAnimationFrame(() => {
+      scrollToBottom(true);
+    });
   } else {
     showJumpButton();
   }
@@ -434,7 +479,7 @@ messageForm.addEventListener('submit', async (event) => {
     refreshSelectedImageUI();
     messageInput.focus();
     shouldStickToBottom = true;
-    scrollToBottom(true);
+    stabilizeScrollAfterMedia();
   } catch (error) {
     setUploadStatus(error.message || 'Image upload failed.', 'error');
   } finally {
