@@ -195,6 +195,35 @@ input {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.03);
 }
+.message-image-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.download-icon-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  text-decoration: none;
+  font-size: 18px;
+  font-weight: 700;
+  color: white;
+  background: rgba(9, 13, 26, 0.78);
+  border: 1px solid rgba(255,255,255,0.14);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.22);
+}
+
+.download-icon-btn:hover {
+  background: rgba(20, 28, 50, 0.92);
+}
 .message-image-meta, .message-kind-pill { font-size: 0.78rem; color: var(--muted); }
 .message-kind-pill {
   border: 1px solid var(--border);

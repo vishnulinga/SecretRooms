@@ -158,8 +158,9 @@ function renderMessageBody(message) {
     : '';
 
   const imageBlock = message.image
-    ? `
-      <div class="message-image-wrap">
+  ? `
+    <div class="message-image-wrap">
+      <div class="message-image-frame">
         <a href="${escapeHtml(message.image.url)}" target="_blank" rel="noreferrer">
           <img
             class="message-image"
@@ -168,10 +169,24 @@ function renderMessageBody(message) {
             loading="lazy"
           />
         </a>
-        <div class="message-image-meta">Compressed image · ${escapeHtml(formatBytes(message.image.sizeBytes))}</div>
+
+        <a
+          class="download-icon-btn"
+          href="${escapeHtml(message.image.url)}"
+          download="shared-image.webp"
+          title="Download image"
+          aria-label="Download image"
+        >
+          ⬇
+        </a>
       </div>
-    `
-    : '';
+
+      <div class="message-image-meta">
+        Compressed image · ${escapeHtml(formatBytes(message.image.sizeBytes))}
+      </div>
+    </div>
+  `
+  : '';
 
   return `${imageBlock}${textBlock}`;
 }
@@ -317,20 +332,18 @@ async function copyRoomLink() {
     }
 
     await navigator.clipboard.writeText(window.location.href);
-    buttons.forEach((btn) => { btn.textContent = 'Copied'; });
+
+    buttons.forEach((btn) => {
+      btn.textContent = 'Copied';
+    });
+
     setTimeout(() => {
-      buttons.forEach((btn) => { btn.textContent = 'Copy Link'; });
+      buttons.forEach((btn) => {
+        btn.textContent = 'Copy Link';
+      });
     }, 1200);
-  } catch (error) {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      buttons.forEach((btn) => { btn.textContent = 'Copied'; });
-      setTimeout(() => {
-        buttons.forEach((btn) => { btn.textContent = 'Copy Link'; });
-      }, 1200);
-    } catch (_error) {
-      window.prompt('Copy this room link:', window.location.href);
-    }
+  } catch (_error) {
+    window.prompt('Copy this room link:', window.location.href);
   }
 }
 
