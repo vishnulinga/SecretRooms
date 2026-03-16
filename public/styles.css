@@ -332,3 +332,28 @@ input {
   .composer-actions { grid-template-columns: 1fr 1fr; }
   .primary-btn, .secondary-btn, .danger-btn { padding: 13px 14px; }
 }
+
+.messages-wrap {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.jump-to-latest {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 4;
+  border: 1px solid var(--border);
+  background: rgba(18, 26, 48, 0.96);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+.jump-to-latest:hover {
+  transform: translateY(-1px);
+}

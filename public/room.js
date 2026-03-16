@@ -16,6 +16,7 @@ const selectedImageWrap = document.getElementById('selectedImageWrap');
 const selectedImageName = document.getElementById('selectedImageName');
 const clearImageBtn = document.getElementById('clearImageBtn');
 const typingBar = document.getElementById('typingBar');
+const jumpToLatestBtn = document.getElementById('jumpToLatestBtn');
 
 const copyRoomBtn = document.getElementById('copyRoomBtn');
 const leaveRoomBtn = document.getElementById('leaveRoomBtn');
@@ -28,7 +29,6 @@ const closePeopleBtn = document.getElementById('closePeopleBtn');
 const peopleDrawer = document.getElementById('peopleDrawer');
 const drawerBackdrop = document.getElementById('drawerBackdrop');
 
-
 let selfUser = null;
 let currentRoomType = 'private';
 let expiresAt = null;
@@ -39,6 +39,7 @@ let uploadingImage = false;
 let lastRenderedMessageSignature = '';
 let lastRenderedUsersSignature = '';
 let lastTypingSignature = '';
+let shouldStickToBottom = true;
 
 roomTitle.textContent = `Room ${roomId}`;
 socket.emit('room:join', { roomId });
@@ -133,6 +134,7 @@ function renderTyping(typingUsers) {
   lastTypingSignature = signature;
 
   const others = typingUsers.filter((user) => !selfUser || user.id !== selfUser.id);
+
   if (!others.length) {
     typingBar.classList.add('hidden');
     typingBar.textContent = '';
@@ -141,6 +143,7 @@ function renderTyping(typingUsers) {
 
   const names = others.map((user) => user.name);
   let label = '';
+
   if (names.length === 1) label = `${names[0]} is typing...`;
   else if (names.length === 2) label = `${names[0]} and ${names[1]} are typing...`;
   else label = `${names[0]} and ${names.length - 1} others are typing...`;
@@ -182,16 +185,35 @@ function getMessagesSignature(messages) {
     .join('|');
 }
 
+function isNearBottom() {
+  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+}
+
+function scrollToBottom(force = false) {
+  if (force || shouldStickToBottom) {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    hideJumpButton();
+  }
+}
+
+function showJumpButton() {
+  jumpToLatestBtn.classList.remove('hidden');
+}
+
+function hideJumpButton() {
+  jumpToLatestBtn.classList.add('hidden');
+}
+
 function renderMessages(messages) {
   const signature = getMessagesSignature(messages);
   if (signature === lastRenderedMessageSignature) return;
   lastRenderedMessageSignature = signature;
 
-  const wasNearBottom =
-    messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+  const wasNearBottom = isNearBottom();
 
   if (!messages.length) {
     messagesEl.innerHTML = `<div class="empty-state">No messages yet. Send the first one.</div>`;
+    hideJumpButton();
     return;
   }
 
@@ -217,8 +239,10 @@ function renderMessages(messages) {
     })
     .join('');
 
-  if (wasNearBottom) {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (wasNearBottom || shouldStickToBottom) {
+    scrollToBottom(true);
+  } else {
+    showJumpButton();
   }
 }
 
@@ -270,12 +294,12 @@ async function uploadImage(file) {
 }
 
 function openDrawer() {
-  peopleDrawer.classList.remove('hidden');
+  peopleDrawer?.classList.remove('hidden');
   document.body.classList.add('drawer-open');
 }
 
 function closeDrawer() {
-  peopleDrawer.classList.add('hidden');
+  peopleDrawer?.classList.add('hidden');
   document.body.classList.remove('drawer-open');
 }
 
@@ -396,6 +420,8 @@ messageForm.addEventListener('submit', async (event) => {
     selectedFile = null;
     refreshSelectedImageUI();
     messageInput.focus();
+    shouldStickToBottom = true;
+    scrollToBottom(true);
   } catch (error) {
     setUploadStatus(error.message || 'Image upload failed.', 'error');
   } finally {
@@ -422,6 +448,13 @@ messageInput.addEventListener('input', () => {
   if (shouldType) socket.emit('room:typing', { roomId, isTyping: true });
 });
 
+messageInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    messageForm.requestSubmit();
+  }
+});
+
 imageInput.addEventListener('change', () => {
   const [file] = imageInput.files || [];
   selectedFile = file || null;
@@ -444,6 +477,19 @@ messagesEl.addEventListener('click', (event) => {
   if (!messageId) return;
 
   socket.emit('message:delete', { roomId, messageId });
+});
+
+messagesEl.addEventListener('scroll', () => {
+  shouldStickToBottom = isNearBottom();
+  if (shouldStickToBottom) {
+    hideJumpButton();
+  }
+});
+
+jumpToLatestBtn?.addEventListener('click', () => {
+  shouldStickToBottom = true;
+  scrollToBottom(true);
+  messageInput.focus();
 });
 
 copyRoomBtn?.addEventListener('click', copyRoomLink);
