@@ -29,6 +29,21 @@ const closePeopleBtn = document.getElementById('closePeopleBtn');
 const peopleDrawer = document.getElementById('peopleDrawer');
 const drawerBackdrop = document.getElementById('drawerBackdrop');
 
+const toastRoot = document.getElementById('toastRoot');
+
+const confirmModal = document.getElementById('confirmModal');
+const confirmBackdrop = document.getElementById('confirmBackdrop');
+const confirmTitleEl = document.getElementById('confirmTitle');
+const confirmMessageEl = document.getElementById('confirmMessage');
+const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+const confirmOkBtn = document.getElementById('confirmOkBtn');
+
+const linkModal = document.getElementById('linkModal');
+const linkBackdrop = document.getElementById('linkBackdrop');
+const linkModalInput = document.getElementById('linkModalInput');
+const linkModalCloseBtn = document.getElementById('linkModalCloseBtn');
+const linkModalCopyBtn = document.getElementById('linkModalCopyBtn');
+
 let selfUser = null;
 let currentRoomType = 'private';
 let expiresAt = null;
@@ -41,6 +56,8 @@ let lastRenderedUsersSignature = '';
 let lastTypingSignature = '';
 let shouldStickToBottom = true;
 
+let confirmResolver = null;
+
 roomTitle.textContent = `Room ${roomId}`;
 socket.emit('room:join', { roomId });
 
@@ -51,6 +68,76 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function showToast(message, type = 'info', duration = 2200) {
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toastRoot.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('toast-visible'));
+
+  setTimeout(() => {
+    toast.classList.remove('toast-visible');
+    setTimeout(() => toast.remove(), 220);
+  }, duration);
+}
+
+function openConfirmModal({ title, message, confirmText = 'Confirm', danger = true }) {
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+    confirmTitleEl.textContent = title;
+    confirmMessageEl.textContent = message;
+    confirmOkBtn.textContent = confirmText;
+    confirmOkBtn.className = danger ? 'danger-btn' : 'primary-btn';
+
+    confirmModal.classList.remove('hidden');
+    document.body.classList.add('drawer-open');
+  });
+}
+
+function closeConfirmModal(result) {
+  confirmModal.classList.add('hidden');
+  document.body.classList.remove('drawer-open');
+
+  if (confirmResolver) {
+    confirmResolver(result);
+    confirmResolver = null;
+  }
+}
+
+function openLinkModal() {
+  linkModalInput.value = window.location.href;
+  linkModal.classList.remove('hidden');
+  document.body.classList.add('drawer-open');
+}
+
+function closeLinkModal() {
+  linkModal.classList.add('hidden');
+  document.body.classList.remove('drawer-open');
+}
+
+async function copyText(text) {
+  await navigator.clipboard.writeText(text);
+}
+
+async function copyRoomLink() {
+  try {
+    if (navigator.share && window.innerWidth < 900) {
+      await navigator.share({
+        title: 'LiveNote room',
+        text: 'Join my LiveNote room',
+        url: window.location.href,
+      });
+      return;
+    }
+
+    await copyText(window.location.href);
+    showToast('Room link copied', 'success');
+  } catch (_error) {
+    openLinkModal();
+  }
 }
 
 function formatTime(timestamp) {
@@ -158,40 +245,40 @@ function renderMessageBody(message) {
     : '';
 
   const widthAttr = message.image?.width ? `width="${Number(message.image.width)}"` : '';
-const heightAttr = message.image?.height ? `height="${Number(message.image.height)}"` : '';
+  const heightAttr = message.image?.height ? `height="${Number(message.image.height)}"` : '';
 
-const imageBlock = message.image
-  ? `
-    <div class="message-image-wrap">
-      <div class="message-image-frame">
-        <a href="${escapeHtml(message.image.url)}" target="_blank" rel="noreferrer">
-          <img
-            class="message-image"
-            src="${escapeHtml(message.image.url)}"
-            alt="Shared image by ${escapeHtml(message.senderName)}"
-            loading="lazy"
-            ${widthAttr}
-            ${heightAttr}
-          />
-        </a>
+  const imageBlock = message.image
+    ? `
+      <div class="message-image-wrap">
+        <div class="message-image-frame">
+          <a href="${escapeHtml(message.image.url)}" target="_blank" rel="noreferrer">
+            <img
+              class="message-image"
+              src="${escapeHtml(message.image.url)}"
+              alt="Shared image by ${escapeHtml(message.senderName)}"
+              loading="lazy"
+              ${widthAttr}
+              ${heightAttr}
+            />
+          </a>
 
-        <a
-          class="download-icon-btn"
-          href="${escapeHtml(message.image.url)}"
-          download="shared-image.webp"
-          title="Download image"
-          aria-label="Download image"
-        >
-          ⬇
-        </a>
+          <a
+            class="download-icon-btn"
+            href="${escapeHtml(message.image.url)}"
+            download="shared-image.webp"
+            title="Download image"
+            aria-label="Download image"
+          >
+            ⬇
+          </a>
+        </div>
+
+        <div class="message-image-meta">
+          Compressed image · ${escapeHtml(formatBytes(message.image.sizeBytes))}
+        </div>
       </div>
-
-      <div class="message-image-meta">
-        Compressed image · ${escapeHtml(formatBytes(message.image.sizeBytes))}
-      </div>
-    </div>
-  `
-  : '';
+    `
+    : '';
 
   return `${imageBlock}${textBlock}`;
 }
@@ -209,6 +296,14 @@ function isNearBottom() {
   return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
 }
 
+function hideJumpButton() {
+  jumpToLatestBtn.classList.add('hidden');
+}
+
+function showJumpButton() {
+  jumpToLatestBtn.classList.remove('hidden');
+}
+
 function scrollToBottom(force = false) {
   if (force || shouldStickToBottom) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -221,10 +316,8 @@ function stabilizeScrollAfterMedia() {
 
   requestAnimationFrame(() => {
     scrollToBottom(true);
-
     requestAnimationFrame(() => {
       scrollToBottom(true);
-
       setTimeout(() => {
         scrollToBottom(true);
       }, 60);
@@ -250,14 +343,6 @@ function attachImageLoadHandlers() {
       img.addEventListener('error', onReady, { once: true });
     }
   });
-}
-
-function showJumpButton() {
-  jumpToLatestBtn.classList.remove('hidden');
-}
-
-function hideJumpButton() {
-  jumpToLatestBtn.classList.add('hidden');
 }
 
 function renderMessages(messages) {
@@ -298,9 +383,7 @@ function renderMessages(messages) {
   attachImageLoadHandlers();
 
   if (wasNearBottom || shouldStickToBottom) {
-    requestAnimationFrame(() => {
-      scrollToBottom(true);
-    });
+    stabilizeScrollAfterMedia();
   } else {
     showJumpButton();
   }
@@ -363,37 +446,8 @@ function closeDrawer() {
   document.body.classList.remove('drawer-open');
 }
 
-async function copyRoomLink() {
-  const buttons = [copyRoomBtn, copyRoomBtnMobile].filter(Boolean);
-
-  try {
-    if (navigator.share && window.innerWidth < 900) {
-      await navigator.share({
-        title: 'LiveNote room',
-        text: 'Join my LiveNote room',
-        url: window.location.href,
-      });
-      return;
-    }
-
-    await navigator.clipboard.writeText(window.location.href);
-
-    buttons.forEach((btn) => {
-      btn.textContent = 'Copied';
-    });
-
-    setTimeout(() => {
-      buttons.forEach((btn) => {
-        btn.textContent = 'Copy Link';
-      });
-    }, 1200);
-  } catch (_error) {
-    window.prompt('Copy this room link:', window.location.href);
-  }
-}
-
 socket.on('connect_error', (error) => {
-  alert(error?.message || 'Unable to connect right now.');
+  showToast(error?.message || 'Unable to connect right now.', 'error', 3000);
 });
 
 socket.on('room:joined', ({ self, roomType, expiresAt: incomingExpiry }) => {
@@ -423,12 +477,14 @@ socket.on('room:state', ({ participants, messages, users, roomType, typing, expi
 });
 
 socket.on('room:not-found', () => {
-  alert('This room no longer exists. Create a new one.');
-  window.location.href = '/';
+  showToast('This room no longer exists.', 'error', 2200);
+  setTimeout(() => {
+    window.location.href = '/';
+  }, 700);
 });
 
 socket.on('room:error', ({ message }) => {
-  alert(message || 'Something went wrong in this room.');
+  showToast(message || 'Something went wrong in this room.', 'error', 2600);
 });
 
 socket.on('room:left', () => {
@@ -440,8 +496,11 @@ socket.on('room:killed', ({ reason }) => {
   if (reason === 'expired') text = 'This room expired and was deleted.';
   if (reason === 'unused') text = 'This room was never used and was deleted.';
   if (reason === 'empty') text = 'This room closed because everyone left.';
-  alert(text);
-  window.location.href = '/';
+
+  showToast(text, 'info', 2200);
+  setTimeout(() => {
+    window.location.href = '/';
+  }, 800);
 });
 
 messageForm.addEventListener('submit', async (event) => {
@@ -482,6 +541,7 @@ messageForm.addEventListener('submit', async (event) => {
     stabilizeScrollAfterMedia();
   } catch (error) {
     setUploadStatus(error.message || 'Image upload failed.', 'error');
+    showToast(error.message || 'Image upload failed.', 'error', 2600);
   } finally {
     uploadingImage = false;
     updateControls();
@@ -527,21 +587,27 @@ clearImageBtn.addEventListener('click', () => {
   setUploadStatus('');
 });
 
-messagesEl.addEventListener('click', (event) => {
+messagesEl.addEventListener('click', async (event) => {
   const button = event.target.closest('.delete-msg-btn');
   if (!button) return;
 
   const messageId = button.getAttribute('data-message-id');
   if (!messageId) return;
 
+  const confirmed = await openConfirmModal({
+    title: 'Delete message?',
+    message: 'This will permanently remove your message from the room.',
+    confirmText: 'Delete',
+    danger: true,
+  });
+
+  if (!confirmed) return;
   socket.emit('message:delete', { roomId, messageId });
 });
 
 messagesEl.addEventListener('scroll', () => {
   shouldStickToBottom = isNearBottom();
-  if (shouldStickToBottom) {
-    hideJumpButton();
-  }
+  if (shouldStickToBottom) hideJumpButton();
 });
 
 jumpToLatestBtn?.addEventListener('click', () => {
@@ -553,24 +619,54 @@ jumpToLatestBtn?.addEventListener('click', () => {
 copyRoomBtn?.addEventListener('click', copyRoomLink);
 copyRoomBtnMobile?.addEventListener('click', copyRoomLink);
 
-leaveRoomBtn?.addEventListener('click', () => {
-  const confirmed = window.confirm('Leave this room on this device?');
+leaveRoomBtn?.addEventListener('click', async () => {
+  const confirmed = await openConfirmModal({
+    title: 'Leave room?',
+    message: 'You will leave this room on this device.',
+    confirmText: 'Leave',
+    danger: false,
+  });
+
   if (!confirmed) return;
   socket.emit('room:leave', { roomId });
 });
 
 leaveRoomBtnMobile?.addEventListener('click', () => leaveRoomBtn?.click());
 
-killRoomBtn?.addEventListener('click', () => {
-  const confirmed = window.confirm('Delete this room for everyone? This cannot be undone.');
+killRoomBtn?.addEventListener('click', async () => {
+  const confirmed = await openConfirmModal({
+    title: 'Delete room?',
+    message: 'This will delete the room for everyone. This cannot be undone.',
+    confirmText: 'Delete room',
+    danger: true,
+  });
+
   if (!confirmed) return;
   socket.emit('room:kill', { roomId });
 });
 
 killRoomBtnMobile?.addEventListener('click', () => killRoomBtn?.click());
+
 openPeopleBtn?.addEventListener('click', openDrawer);
 closePeopleBtn?.addEventListener('click', closeDrawer);
 drawerBackdrop?.addEventListener('click', closeDrawer);
+
+confirmCancelBtn?.addEventListener('click', () => closeConfirmModal(false));
+confirmOkBtn?.addEventListener('click', () => closeConfirmModal(true));
+confirmBackdrop?.addEventListener('click', () => closeConfirmModal(false));
+
+linkModalCloseBtn?.addEventListener('click', closeLinkModal);
+linkBackdrop?.addEventListener('click', closeLinkModal);
+
+linkModalCopyBtn?.addEventListener('click', async () => {
+  try {
+    await copyText(linkModalInput.value);
+    showToast('Room link copied', 'success');
+    closeLinkModal();
+  } catch {
+    showToast('Could not copy room link', 'error');
+  }
+});
 
 window.addEventListener('beforeunload', () => {
   if (typingActive) socket.emit('room:typing', { roomId, isTyping: false });
