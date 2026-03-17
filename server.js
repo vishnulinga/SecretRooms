@@ -42,21 +42,33 @@ const USER_COLORS = [
 ];
 
 const ROOM_ADJECTIVES = [
-  'green','silver','tiny','happy','wild','brave','lucky','sunny','fuzzy','swift','magic','neon',
-  'cosmic','quiet','electric','crisp','golden','sleepy','spicy','velvet','rapid','clever','minty','bright'
+  'amber','arctic','atomic','azure','blazing','blooming','breezy','bronze','bubbly','calm',
+  'chilly','chill','crimson','daring','dusty','echoing','ember','fancy','feisty','fluffy',
+  'frosty','gentle','glossy','gritty','hollow','icy','jaded','jumpy','kind','lunar',
+  'mellow','misty','moody','murky','noble','oceanic','opal','peppy','plush','primal',
+  'quiet','radiant','rusty','shady','shiny','smoky','smooth','stormy','tender','vivid'
 ];
 const ROOM_NOUNS = [
-  'apple','tiger','rocket','panda','pizza','river','planet','cookie','dragon','banana','forest','otter',
-  'thunder','cactus','falcon','breeze','pearl','comet','dolphin','meadow','phoenix','cloud','galaxy','mango'
+  'anchor','avalanche','beacon','blossom','canyon','castle','cavern','cherry','citadel','coral',
+  'crystal','desert','ember','feather','fjord','flame','glacier','grove','harbor','island',
+  'jungle','lagoon','lantern','lighthouse','meteor','mirage','nebula','oasis','orchard','palace',
+  'pebble','reef','ridge','safari','sandstorm','shadow','shrine','skylight','snowfall','spark',
+  'summit','temple','tornado','valley','volcano','waterfall','whirlpool','willow','zenith','zeppelin'
 ];
 
 const NAME_ADJECTIVES = [
-  'Funky','Turbo','Sleepy','Cosmic','Wobbly','Angry','Neon','Lucky','Cheeky','Jolly','Sneaky','Nifty',
-  'Dizzy','Bouncy','Sassy','Zippy','Goofy','Sparkly','Mighty','Chunky','Noisy','Silly','Spicy','Giggly'
+  'Blazing','Chill','Daring','Epic','Fierce','Flashy','Glitchy','Groovy','Hyper','Icy',
+  'Jazzy','Kooky','Legendary','Loud','Moody','Nimble','Oddball','Peppy','Quirky','Rad',
+  'Rogue','Savage','Shiny','Snappy','Speedy','Spooky','Stealthy','Stormy','Swaggy','Tasty',
+  'Trippy','Viral','Witty','Zany','Electric','Frosty','Golden','Hollow','Jumpy','Lucky',
+  'Mystic','Nocturnal','Plucky','Rowdy','Slick','Sneaky','Spark','Turbocharged','Wild','Zesty'
 ];
 const NAME_NOUNS = [
-  'Penguin','Potato','Panda','Banana','Tiger','Burrito','Otter','Noodle','Fox','Goblin','Muffin','Pickle',
-  'Unicorn','Taco','Koala','Llama','Dragon','Waffle','Hamster','Raccoon','Cupcake','Cactus','Mango','Walrus'
+  'Alien','Avocado','Badger','Biscuit','Blob','Buffalo','Chimera','Cobra','Crab','Dinosaur',
+  'Donut','Eagle','Falcon','Ferret','Flamingo','Frog','Giraffe','Golem','Goose','Hawk',
+  'Hedgehog','Hippo','Jaguar','Jelly','Kitten','Kraken','Lobster','Mantis','Meerkat','Moose',
+  'Narwhal','Octopus','Owl','Panther','Parrot','Penguin','Piranha','Puffin','Rhino','Shark',
+  'Sloth','Snail','Spider','Squirrel','Stallion','Toad','Turtle','Viper','Wolf','Yak'
 ];
 
 const rooms = new Map();
@@ -751,5 +763,5 @@ app.use((error, _req, res, _next) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`LiveNote Secure Beta running on http://localhost:${PORT}`);
+  console.log(`HushrChat Secure Beta running on http://localhost:${PORT}`);
 });
