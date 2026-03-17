@@ -126,8 +126,8 @@ async function copyRoomLink() {
   try {
     if (navigator.share && window.innerWidth < 900) {
       await navigator.share({
-        title: 'LiveNote room',
-        text: 'Join my LiveNote room',
+        title: 'HushrChat room',
+        text: 'Join my HushrChat room',
         url: window.location.href,
       });
       return;

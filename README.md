@@ -1,4 +1,4 @@
-# LiveNote Secure Beta
+# HushrChat Secure Beta
 
 Mobile-first ephemeral realtime chat with temporary text and image messages.
 
