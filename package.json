@@ -9,6 +9,7 @@
     "dev": "NODE_ENV=development node server.js"
   },
   "dependencies": {
+    "@plausible-analytics/tracker": "^0.4.4",
     "@sentry/browser": "^10.43.0",
     "@sentry/node": "^10.43.0",
     "@sentry/profiling-node": "^10.43.0",
