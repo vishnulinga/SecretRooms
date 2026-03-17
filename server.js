@@ -7,9 +7,20 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const sharp = require('sharp');
 const { Server } = require('socket.io');
+const Sentry = require('@sentry/node');
+const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 
 const app = express();
 app.set('trust proxy', 1);
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN_SERVER,
+  environment: process.env.NODE_ENV || 'development',
+  integrations: [nodeProfilingIntegration()],
+  tracesSampleRate: 0.2,
+  profilesSampleRate: 0.2,
+  sendDefaultPii: false,
+});
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -48,6 +59,7 @@ const ROOM_ADJECTIVES = [
   'mellow','misty','moody','murky','noble','oceanic','opal','peppy','plush','primal',
   'quiet','radiant','rusty','shady','shiny','smoky','smooth','stormy','tender','vivid'
 ];
+
 const ROOM_NOUNS = [
   'anchor','avalanche','beacon','blossom','canyon','castle','cavern','cherry','citadel','coral',
   'crystal','desert','ember','feather','fjord','flame','glacier','grove','harbor','island',
@@ -63,6 +75,7 @@ const NAME_ADJECTIVES = [
   'Trippy','Viral','Witty','Zany','Electric','Frosty','Golden','Hollow','Jumpy','Lucky',
   'Mystic','Nocturnal','Plucky','Rowdy','Slick','Sneaky','Spark','Turbocharged','Wild','Zesty'
 ];
+
 const NAME_NOUNS = [
   'Alien','Avocado','Badger','Biscuit','Blob','Buffalo','Chimera','Cobra','Crab','Dinosaur',
   'Donut','Eagle','Falcon','Ferret','Flamingo','Frog','Giraffe','Golem','Goose','Hawk',
@@ -318,6 +331,32 @@ function createSocketLimiter({ limit, windowMs, keyFn }) {
   };
 }
 
+async function sendPlausibleEvent(req, name, props = {}) {
+  try {
+    const domain = process.env.PLAUSIBLE_DOMAIN;
+    if (!domain) return;
+
+    await fetch('https://plausible.io/api/event', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'HushrChat Server Analytics',
+      },
+      body: JSON.stringify({
+        name,
+        url: `${req.protocol}://${req.get('host')}${req.originalUrl || '/'}`,
+        domain,
+        props,
+      }),
+    });
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { area: 'analytics', provider: 'plausible', side: 'server' },
+      extra: { eventName: name, props },
+    });
+  }
+}
+
 const socketLimitByIp = (limit, windowMs) =>
   createSocketLimiter({
     limit,
@@ -360,17 +399,32 @@ app.use(
   helmet({
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:'],
-        connectSrc: ["'self'", 'ws:', 'wss:'],
-        objectSrc: ["'none'"],
-        baseUri: ["'self'"],
-        frameAncestors: ["'none'"],
-      },
-    },
+  directives: {
+    defaultSrc: ["'self'"],
+
+    scriptSrc: [
+      "'self'",
+      "https://plausible.io",
+      "https://browser.sentry-cdn.com"
+    ],
+
+    styleSrc: ["'self'", "'unsafe-inline'"],
+
+    imgSrc: ["'self'", "data:", "blob:"],
+
+    connectSrc: [
+      "'self'",
+      "ws:",
+      "wss:",
+      "https://plausible.io",
+      "https://*.ingest.sentry.io"
+    ],
+
+    objectSrc: ["'none'"],
+    baseUri: ["'self'"],
+    frameAncestors: ["'none'"],
+  },
+},
     referrerPolicy: { policy: 'no-referrer' },
   })
 );
@@ -385,18 +439,49 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
+app.get('/env.js', (_req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.send(`
+    window.__ENV__ = {
+      SENTRY_DSN: "${process.env.SENTRY_DSN_BROWSER || ''}"
+    };
+  `);
+});
+
+app.get('/config.js', (_req, res) => {
+  res.type('application/javascript');
+  res.send(
+    `window.APP_CONFIG = ${JSON.stringify({
+      sentryBrowserDsn: process.env.SENTRY_DSN_BROWSER || '',
+      environment: NODE_ENV,
+      plausibleDomain: process.env.PLAUSIBLE_DOMAIN || '',
+    })};`
+  );
+});
+
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.post('/api/rooms', createLimiter, (req, res) => {
+app.post('/api/rooms', createLimiter, async (req, res) => {
   try {
     const roomType = req.body?.roomType === 'admin' ? 'admin' : 'private';
     const roomId = createRoomId();
     createRoom(roomId, roomType);
 
-    res.json({ roomId, roomType, url: `/${roomId}` });
+    await sendPlausibleEvent(req, 'room_created', {
+      room_type: roomType,
+    });
+
+    res.json({
+      roomId,
+      roomType,
+      url: `/${roomId}`,
+    });
   } catch (error) {
+    Sentry.captureException(error, {
+      tags: { area: 'room_create' },
+    });
     res.status(503).json({ error: error.message || 'Could not create room.' });
   }
 });
@@ -405,9 +490,18 @@ app.post('/api/rooms/:roomId/upload-image', uploadLimiter, upload.single('image'
   const roomId = req.params.roomId;
   const room = rooms.get(roomId);
 
-  if (!room) return res.status(404).json({ error: 'Room not found.' });
-  if (!req.file) return res.status(400).json({ error: 'No image received.' });
+  if (!room) {
+    await sendPlausibleEvent(req, 'image_upload_failed', { reason: 'room_not_found' });
+    return res.status(404).json({ error: 'Room not found.' });
+  }
+
+  if (!req.file) {
+    await sendPlausibleEvent(req, 'image_upload_failed', { reason: 'no_file' });
+    return res.status(400).json({ error: 'No image received.' });
+  }
+
   if (room.assets.size >= MAX_IMAGES_PER_ROOM) {
+    await sendPlausibleEvent(req, 'image_upload_failed', { reason: 'room_image_limit' });
     return res.status(400).json({ error: 'This room reached the image limit.' });
   }
 
@@ -426,6 +520,7 @@ app.post('/api/rooms/:roomId/upload-image', uploadLimiter, upload.single('image'
     const compressed = await transformed.toBuffer();
 
     if (getRoomImageUsageBytes(room) + compressed.length > MAX_IMAGE_BYTES_PER_ROOM) {
+      await sendPlausibleEvent(req, 'image_upload_failed', { reason: 'room_temp_space_exceeded' });
       return res.status(400).json({ error: 'This room is out of temporary image space.' });
     }
 
@@ -441,6 +536,13 @@ app.post('/api/rooms/:roomId/upload-image', uploadLimiter, upload.single('image'
 
     extendRoomExpiry(room);
 
+    const room = rooms.get(roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+
+    await sendPlausibleEvent(req, 'image_upload_success', {
+      room_type: room.type,
+    });
+
     return res.json({
       assetId,
       url: buildAssetUrl(roomId, assetId),
@@ -450,6 +552,11 @@ app.post('/api/rooms/:roomId/upload-image', uploadLimiter, upload.single('image'
       sizeBytes: compressed.length,
     });
   } catch (error) {
+    await sendPlausibleEvent(req, 'image_upload_failed', { reason: 'processing_error' });
+    Sentry.captureException(error, {
+      tags: { area: 'image_upload' },
+      extra: { roomId },
+    });
     logSecurity('image_processing_failed', { roomId, error: String(error) });
     return res.status(400).json({ error: 'Could not process that image.' });
   }
@@ -466,6 +573,7 @@ app.get('/room-assets/:roomId/:assetId', (req, res) => {
   res.setHeader('Content-Type', asset.mimeType);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', 'inline; filename="shared-image.webp"');
   res.send(asset.buffer);
 });
 
@@ -477,6 +585,11 @@ io.use((socket, next) => {
   const ip = getClientIp(socket);
   const current = ipConnectionCounts.get(ip) || 0;
   if (current >= MAX_SOCKETS_PER_IP) {
+    Sentry.captureMessage('Socket connection limit reached', {
+      level: 'warning',
+      tags: { area: 'socket_connect_limit' },
+      extra: { ip },
+    });
     return next(new Error('Too many active connections from this IP.'));
   }
   socket.data.clientIp = ip;
@@ -491,11 +604,21 @@ io.on('connection', (socket) => {
 
   socket.on('room:join', ({ roomId }) => {
     if (!joinLimiter(socket)) {
+      Sentry.captureMessage('Join rate limited', {
+        level: 'warning',
+        tags: { area: 'room_join_rate_limit' },
+        extra: { roomId, ip: socket.data.clientIp },
+      });
       socket.emit('room:error', { message: 'Too many join attempts. Please slow down.' });
       return;
     }
 
     if (!roomId || !/^[a-z0-9-]+$/.test(roomId)) {
+      Sentry.captureMessage('Invalid room ID supplied', {
+        level: 'warning',
+        tags: { area: 'room_join_invalid_id' },
+        extra: { roomId, ip: socket.data.clientIp },
+      });
       socket.emit('room:error', { message: 'Invalid room ID.' });
       return;
     }
@@ -508,6 +631,11 @@ io.on('connection', (socket) => {
 
     const ip = socket.data.clientIp;
     if ((ipActiveRooms.get(ip) || 0) >= MAX_JOINED_ROOMS_PER_IP) {
+      Sentry.captureMessage('Too many joined rooms from IP', {
+        level: 'warning',
+        tags: { area: 'room_join_ip_limit' },
+        extra: { roomId, ip },
+      });
       socket.emit('room:error', { message: 'Too many joined rooms from this IP.' });
       return;
     }
@@ -747,6 +875,8 @@ io.on('connection', (socket) => {
   });
 });
 
+Sentry.setupExpressErrorHandler(app);
+
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({
@@ -755,7 +885,7 @@ app.use((error, _req, res, _next) => {
   }
 
   if (error) {
-    logSecurity('server_error', { error: String(error) });
+    Sentry.captureException(error);
     return res.status(500).json({ error: 'Unexpected server error.' });
   }
 

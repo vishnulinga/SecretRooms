@@ -1,3 +1,17 @@
+window.plausible =
+  window.plausible ||
+  function () {
+    (window.plausible.q = window.plausible.q || []).push(arguments);
+  };
+
+function trackEvent(name, props = {}) {
+  try {
+    window.plausible(name, { props });
+  } catch (_error) {
+    // no-op
+  }
+}
+
 const createPrivateRoomBtn = document.getElementById('createPrivateRoomBtn');
 const createAdminRoomBtn = document.getElementById('createAdminRoomBtn');
 
@@ -11,6 +25,10 @@ async function createAndOpenRoom(roomType, button) {
     `<span class="quick-create-desc">Opening your ${roomType} room</span>`;
 
   try {
+    trackEvent(roomType === 'admin' ? 'create_admin_clicked' : 'create_private_clicked', {
+      location: 'landing',
+    });
+
     const response = await fetch('/api/rooms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -23,8 +41,16 @@ async function createAndOpenRoom(roomType, button) {
       throw new Error(data.error || 'Could not create room');
     }
 
+    trackEvent('room_create_success', {
+      room_type: roomType,
+    });
+
     window.location.href = `/${encodeURIComponent(data.roomId)}`;
   } catch (error) {
+    trackEvent('room_create_failed', {
+      room_type: roomType,
+    });
+
     alert(error.message || 'Could not create room. Please try again.');
     createPrivateRoomBtn.disabled = false;
     createAdminRoomBtn.disabled = false;
@@ -32,10 +58,10 @@ async function createAndOpenRoom(roomType, button) {
   }
 }
 
-createPrivateRoomBtn?.addEventListener('click', () =>
-  createAndOpenRoom('private', createPrivateRoomBtn)
-);
+createPrivateRoomBtn?.addEventListener('click', () => {
+  createAndOpenRoom('private', createPrivateRoomBtn);
+});
 
-createAdminRoomBtn?.addEventListener('click', () =>
-  createAndOpenRoom('admin', createAdminRoomBtn)
-);
+createAdminRoomBtn?.addEventListener('click', () => {
+  createAndOpenRoom('admin', createAdminRoomBtn);
+});

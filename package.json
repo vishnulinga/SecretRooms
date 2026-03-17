@@ -9,6 +9,9 @@
     "dev": "NODE_ENV=development node server.js"
   },
   "dependencies": {
+    "@sentry/browser": "^10.43.0",
+    "@sentry/node": "^10.43.0",
+    "@sentry/profiling-node": "^10.43.0",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.1.0",

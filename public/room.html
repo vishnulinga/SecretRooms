@@ -7,6 +7,21 @@
     <link rel="icon" href="/logo.svg" type="image/svg+xml" />
     <link rel="shortcut icon" href="/logo.svg" />
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/env.js"></script>
+
+    <script
+      defer
+      data-domain="secretrooms.onrender.com"
+      src="https://plausible.io/js/script.js"
+    ></script>
+    <script
+      defer
+      src="https://browser.sentry-cdn.com/9.16.0/bundle.tracing.replay.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script defer src="/config.js"></script>
+    <script defer src="/vendor/socket.io.min.js"></script>
+    <script defer src="/room.js"></script>
   </head>
   <body class="room-page">
     <main class="room-app">
@@ -15,7 +30,7 @@
           <div class="room-title-block">
             <div class="brand brand-room">
               <img src="/favicon.svg" alt="HushrChat logo" class="brand-logo" />
-             <span class="brand-name">HushrChat</span>
+              <span class="brand-name">HushrChat</span>
             </div>
             <p class="eyebrow">Live room</p>
             <h1 id="roomTitle">Connecting...</h1>
@@ -125,10 +140,8 @@
       </aside>
     </div>
 
-    <!-- Toast -->
     <div id="toastRoot" class="toast-root"></div>
 
-    <!-- Confirm Modal -->
     <div id="confirmModal" class="modal hidden" aria-hidden="true">
       <div id="confirmBackdrop" class="modal-backdrop"></div>
       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
@@ -143,7 +156,6 @@
       </div>
     </div>
 
-    <!-- Link Modal -->
     <div id="linkModal" class="modal hidden" aria-hidden="true">
       <div id="linkBackdrop" class="modal-backdrop"></div>
       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="linkModalTitle">
@@ -158,8 +170,5 @@
         </div>
       </div>
     </div>
-
-    <script src="/vendor/socket.io.min.js"></script>
-    <script src="/room.js"></script>
   </body>
 </html>

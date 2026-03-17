@@ -1,3 +1,49 @@
+window.plausible =
+  window.plausible ||
+  function () {
+    (window.plausible.q = window.plausible.q || []).push(arguments);
+  };
+
+function trackEvent(name, props = {}) {
+  try {
+    window.plausible(name, { props });
+  } catch (_error) {
+    // no-op
+  }
+}
+
+const appConfig = window.APP_CONFIG || {};
+
+if (window.Sentry && window.__ENV__?.SENTRY_DSN) {
+  window.Sentry.init({
+    dsn: window.__ENV__.SENTRY_DSN,
+    environment: 'production',
+    tracesSampleRate: 0.2,
+    replaysSessionSampleRate: 0.05,
+    replaysOnErrorSampleRate: 1.0,
+    sendDefaultPii: false,
+  });
+}
+
+function captureClientError(error, context = {}) {
+  if (window.Sentry) {
+    window.Sentry.captureException(error, {
+      tags: { area: 'client' },
+      extra: context,
+    });
+  }
+}
+
+function captureClientMessage(message, level = 'warning', context = {}) {
+  if (window.Sentry) {
+    window.Sentry.captureMessage(message, {
+      level,
+      tags: { area: 'client_message' },
+      extra: context,
+    });
+  }
+}
+
 const socket = io();
 const roomId = window.location.pathname.split('/').pop();
 
@@ -55,7 +101,6 @@ let lastRenderedMessageSignature = '';
 let lastRenderedUsersSignature = '';
 let lastTypingSignature = '';
 let shouldStickToBottom = true;
-
 let confirmResolver = null;
 
 roomTitle.textContent = `Room ${roomId}`;
@@ -125,6 +170,8 @@ async function copyText(text) {
 async function copyRoomLink() {
   try {
     if (navigator.share && window.innerWidth < 900) {
+      trackEvent('room_share_clicked', { method: 'native' });
+
       await navigator.share({
         title: 'HushrChat room',
         text: 'Join my HushrChat room',
@@ -134,8 +181,11 @@ async function copyRoomLink() {
     }
 
     await copyText(window.location.href);
+    trackEvent('room_share_clicked', { method: 'clipboard' });
+
     showToast('Room link copied', 'success');
-  } catch (_error) {
+  } catch {
+    trackEvent('room_share_clicked', { method: 'fallback' });
     openLinkModal();
   }
 }
@@ -447,7 +497,11 @@ function closeDrawer() {
 }
 
 socket.on('connect_error', (error) => {
-  showToast(error?.message || 'Unable to connect right now.', 'error', 3000);
+  const msg = error?.message || 'Unable to connect right now.';
+  trackEvent('socket_connect_error');
+  captureClientMessage(msg, 'error', { roomId });
+  showToast(msg, 'error', 3000);
+  Sentry.captureException(error);
 });
 
 socket.on('room:joined', ({ self, roomType, expiresAt: incomingExpiry }) => {
@@ -456,6 +510,7 @@ socket.on('room:joined', ({ self, roomType, expiresAt: incomingExpiry }) => {
   expiresAt = incomingExpiry;
   updateControls();
   startCountdown();
+  trackEvent('room_joined', { room_type: roomType });
   messageInput.focus();
 });
 
@@ -477,6 +532,7 @@ socket.on('room:state', ({ participants, messages, users, roomType, typing, expi
 });
 
 socket.on('room:not-found', () => {
+  trackEvent('room_not_found');
   showToast('This room no longer exists.', 'error', 2200);
   setTimeout(() => {
     window.location.href = '/';
@@ -484,6 +540,8 @@ socket.on('room:not-found', () => {
 });
 
 socket.on('room:error', ({ message }) => {
+  trackEvent('room_error_shown', { room_type: currentRoomType });
+  captureClientMessage(message || 'room:error', 'warning', { roomId, roomType: currentRoomType });
   showToast(message || 'Something went wrong in this room.', 'error', 2600);
 });
 
@@ -492,6 +550,8 @@ socket.on('room:left', () => {
 });
 
 socket.on('room:killed', ({ reason }) => {
+  trackEvent('room_closed', { reason: reason || 'deleted', room_type: currentRoomType });
+
   let text = 'This room was deleted.';
   if (reason === 'expired') text = 'This room expired and was deleted.';
   if (reason === 'unused') text = 'This room was never used and was deleted.';
@@ -511,12 +571,14 @@ messageForm.addEventListener('submit', async (event) => {
 
   try {
     if (selectedFile) {
+      trackEvent('image_send_started', { room_type: currentRoomType });
       uploadingImage = true;
       updateControls();
       setUploadStatus('Compressing and uploading image...', 'info');
 
       const uploaded = await uploadImage(selectedFile);
       socket.emit('room:send-image', { roomId, assetId: uploaded.assetId, text });
+      trackEvent('image_sent', { room_type: currentRoomType });
 
       setUploadStatus(
         `Image sent. Stored temporarily as compressed WebP (${formatBytes(uploaded.sizeBytes)}).`,
@@ -527,6 +589,7 @@ messageForm.addEventListener('submit', async (event) => {
         if (uploadStatus.textContent.includes('Image sent')) setUploadStatus('');
       }, 2200);
     } else {
+      trackEvent('message_sent', { room_type: currentRoomType });
       socket.emit('room:send-message', { roomId, text });
     }
 
@@ -540,6 +603,8 @@ messageForm.addEventListener('submit', async (event) => {
     shouldStickToBottom = true;
     stabilizeScrollAfterMedia();
   } catch (error) {
+    trackEvent('image_upload_failed', { room_type: currentRoomType });
+    captureClientError(error, { action: 'image_upload', roomId, roomType: currentRoomType });
     setUploadStatus(error.message || 'Image upload failed.', 'error');
     showToast(error.message || 'Image upload failed.', 'error', 2600);
   } finally {
@@ -602,6 +667,8 @@ messagesEl.addEventListener('click', async (event) => {
   });
 
   if (!confirmed) return;
+
+  trackEvent('delete_message_clicked', { room_type: currentRoomType });
   socket.emit('message:delete', { roomId, messageId });
 });
 
@@ -628,6 +695,7 @@ leaveRoomBtn?.addEventListener('click', async () => {
   });
 
   if (!confirmed) return;
+  trackEvent('room_left_clicked', { room_type: currentRoomType });
   socket.emit('room:leave', { roomId });
 });
 
@@ -642,6 +710,7 @@ killRoomBtn?.addEventListener('click', async () => {
   });
 
   if (!confirmed) return;
+  trackEvent('room_kill_clicked', { room_type: currentRoomType });
   socket.emit('room:kill', { roomId });
 });
 
@@ -661,10 +730,24 @@ linkBackdrop?.addEventListener('click', closeLinkModal);
 linkModalCopyBtn?.addEventListener('click', async () => {
   try {
     await copyText(linkModalInput.value);
+    trackEvent('room_share_clicked', { method: 'modal_copy', room_type: currentRoomType });
     showToast('Room link copied', 'success');
     closeLinkModal();
-  } catch {
+  } catch (error) {
+    captureClientError(error, { action: 'link_modal_copy', roomId });
     showToast('Could not copy room link', 'error');
+  }
+});
+
+window.addEventListener('error', (event) => {
+  if (window.Sentry && event.error) {
+    window.Sentry.captureException(event.error);
+  }
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  if (window.Sentry) {
+    window.Sentry.captureException(event.reason);
   }
 });
 
